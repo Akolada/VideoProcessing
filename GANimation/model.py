@@ -3,6 +3,7 @@ import chainer.links as L
 import chainer.functions as F
 from chainer import cuda,Chain,initializers
 import numpy as np
+from instance_normalization import InstanceNormalization
 
 xp=cuda.cupy
 cuda.get_device(0).use()
@@ -18,7 +19,7 @@ class CBR(Chain):
             self.cpara=L.Convolution2D(in_ch,out_ch,3,1,1,initialW=w)
             self.cdown=L.Convolution2D(in_ch,out_ch,4,2,1,initialW=w)
 
-            self.bn0=L.BatchNormalization(out_ch)
+            self.bn0=InstanceNormalization(out_ch)
 
     def __call__(self,x):
         if self.up:
@@ -26,10 +27,10 @@ class CBR(Chain):
             h=self.activation(self.bn0(self.cpara(h)))
 
         elif self.down:
-            h=self.activation(self.bn0(self.cdown(h)))
+            h=self.activation(self.bn0(self.cdown(x)))
 
         else:
-            h=self.activation(self.bn0(self.cpara(h)))
+            h=self.activation(self.bn0(self.cpara(x)))
 
         return h
 
@@ -48,6 +49,7 @@ class ResBlock(Chain):
 
 class Predictor(Chain):
     def __init__(self,base=64):
+        super(Predictor,self).__init__()
         w=initializers.Normal(0.02)
         with self.init_scope():
             self.c0=CBR(9,base)
@@ -57,10 +59,6 @@ class Predictor(Chain):
             self.down3=CBR(base*8,base*16,down=True)
             self.res0=ResBlock(base*16,base*16)
             self.res1=ResBlock(base*16,base*16)
-            self.res2=ResBlock(base*16,base*16)
-            self.res3=ResBlock(base*16,base*16)
-            self.res4=ResBlock(base*16,base*16)
-            self.res5=ResBlock(base*16,base*16)
             self.up0=CBR(base*32,base*8,up=True)
             self.up1=CBR(base*16,base*4,up=True)
             self.up2=CBR(base*8,base*2,up=True)
@@ -75,10 +73,6 @@ class Predictor(Chain):
         h5=self.down3(h4)
         h=self.res0(h5)
         h=self.res1(h)
-        h=self.res2(h)
-        h=self.res3(h)
-        h=self.res4(h)
-        h=self.res5(H)
         h=self.up0(F.concat([h5,h]))
         h=self.up1(F.concat([h4,h]))
         h=self.up2(F.concat([h3,h]))
@@ -90,6 +84,7 @@ class Predictor(Chain):
 class Discriminator(Chain):
     def __init__(self,base=64):
         w=initializers.Normal(0.02)
+        super(Discriminator,self).__init__()
         with self.init_scope():
             self.down0=CBR(6,base,down=True)
             self.down1=CBR(base,base*2,down=True)
@@ -98,11 +93,10 @@ class Discriminator(Chain):
             self.cout=L.Convolution2D(base*8,1,3,1,1,initialW=w)
 
     def __call__(self,x):
-        h=self.cbr0(x)
-        h=self.cbr1(h)
-        h=self.cbr2(h)
-        h=self.cbr3(h)
+        h=self.down0(x)
+        h=self.down1(h)
+        h=self.down2(h)
+        h=self.down3(h)
         h=self.cout(h)
 
         return h
-
