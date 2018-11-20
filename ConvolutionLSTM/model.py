@@ -1,22 +1,25 @@
 import chainer
 import chainer.links as L
 import chainer.functions as F
-from chainer import cuda,Chain,initializers
+from chainer import cuda,Chain,initializers,Variable
+from instance_normalization import InstanceNormalization
 
 class CBR(Chain):
-    def __init__(self,in_ch,out_ch,up=True,down=True):
+    def __init__(self,in_ch,out_ch,up=False,down=False):
         w=initializers.Normal(0.02)
+        self.up=up
+        self.down=down
         super(CBR,self).__init__()
         with self.init_scope():
             self.cpara=L.Convolution2D(in_ch,out_ch,3,1,1,initialW=w)
             self.cdown=L.Convolution2D(in_ch,out_ch,4,2,1,initialW=w)
 
-            self.bn0=L.BatchNormalization(out_ch)
+            self.bn0=InstanceNormalization(out_ch)
 
     def __call__(self,x):
         if self.up:
             h=F.unpooling_2d(x,2,2,0,cover_all=False)
-            h=F.relu(self.bn0(self.c0(h)))
+            h=F.relu(self.bn0(self.cpara(h)))
 
         elif self.cdown:
             h=F.relu(self.bn0(self.cdown(x)))
@@ -24,32 +27,34 @@ class CBR(Chain):
         else:
             h=F.relu(self.bn0(self.cpara(x)))
 
+        return h
+
 class ConvLSTM(Chain):
     def __init__(self, inp = 256, mid = 128, sz = 5):
-        super(ConvLSTM, self).__init__(
-            Wxi = L.Convolution2D(inp, mid, sz, pad = sz//2),
-            Whi = L.Convolution2D(mid, mid, sz, pad = sz//2, nobias = True),
-            Wxf = L.Convolution2D(inp, mid, sz, pad = sz//2),
-            Whf = L.Convolution2D(mid, mid, sz, pad = sz//2, nobias = True),
-            Wxc = L.Convolution2D(inp, mid, sz, pad = sz//2),
-            Whc = L.Convolution2D(mid, mid, sz, pad = sz//2, nobias = True),
-            Wxo = L.Convolution2D(inp, mid, sz, pad = sz//2),
-            Who = L.Convolution2D(mid, mid, sz, pad = sz//2, nobias = True)
-        )
+        super(ConvLSTM, self).__init__()
+        with self.init_scope():
+            self.wxi = L.Convolution2D(inp, mid, sz, pad = sz//2)
+            self.whi = L.Convolution2D(mid, mid, sz, pad = sz//2, nobias = True)
+            self.wxf = L.Convolution2D(inp, mid, sz, pad = sz//2)
+            self.whf = L.Convolution2D(mid, mid, sz, pad = sz//2, nobias = True)
+            self.wxc = L.Convolution2D(inp, mid, sz, pad = sz//2)
+            self.whc = L.Convolution2D(mid, mid, sz, pad = sz//2, nobias = True)
+            self.wxo = L.Convolution2D(inp, mid, sz, pad = sz//2)
+            self.who = L.Convolution2D(mid, mid, sz, pad = sz//2, nobias = True)
 
         self.inp = inp
         self.mid = mid
-        
+
         self.pc = None
         self.ph = None
 
         with self.init_scope():
             Wci_initializer = initializers.Zero()
-            self.Wci = variable.Parameter(Wci_initializer)
+            self.Wci = chainer.variable.Parameter(Wci_initializer)
             Wcf_initializer = initializers.Zero()
-            self.Wcf = variable.Parameter(Wcf_initializer)
+            self.Wcf = chainer.variable.Parameter(Wcf_initializer)
             Wco_initializer = initializers.Zero()
-            self.Wco = variable.Parameter(Wco_initializer)
+            self.Wco = chainer.variable.Parameter(Wco_initializer)
 
     def reset_state(self, pc = None, ph = None):
         self.pc = pc
@@ -71,10 +76,10 @@ class ConvLSTM(Chain):
         if self.pc is None:
             self.initialize_state(x.data.shape)
 
-        ci = F.sigmoid(self.Wxi(x) + self.Whi(self.ph) + F.scale(self.pc, self.Wci, 1))
-        cf = F.sigmoid(self.Wxf(x) + self.Whf(self.ph) + F.scale(self.pc, self.Wcf, 1))
-        cc = cf * self.pc + ci * F.tanh(self.Wxc(x) + self.Whc(self.ph))
-        co = F.sigmoid(self.Wxo(x) + self.Who(self.ph) + F.scale(cc, self.Wco, 1))
+        ci = F.sigmoid(self.wxi(x) + self.whi(self.ph) + F.scale(self.pc, self.Wci, 1))
+        cf = F.sigmoid(self.wxf(x) + self.whf(self.ph) + F.scale(self.pc, self.Wcf, 1))
+        cc = cf * self.pc + ci * F.tanh(self.wxc(x) + self.whc(self.ph))
+        co = F.sigmoid(self.wxo(x) + self.who(self.ph) + F.scale(cc, self.Wco, 1))
         ch = co * F.tanh(cc)
 
         self.pc = cc
@@ -97,7 +102,7 @@ class EncDec(Chain):
             self.up1=CBR(base*8,base*4,up=True)
             self.up2=CBR(base*4,base*2,up=True)
             self.up3=CBR(base*2,base,up=True)
-            self.cout=L.Convolution2D(base,3,3,1,1,initialW=w)
+            self.up4=CBR(base,3,up=True)
 
     def __call__(self,x):
         self.clstm.reset_state()
@@ -113,7 +118,7 @@ class EncDec(Chain):
         h=self.up1(h)
         h=self.up2(h)
         h=self.up3(h)
-        h=self.cout(h)
+        h=self.up4(h)
 
         return F.tanh(h)
 
@@ -126,13 +131,13 @@ class Discriminator(Chain):
             self.down1=CBR(base,base*2,down=True)
             self.down2=CBR(base*2,base*4,down=True)
             self.down3=CBR(base*4,base*8,down=True)
-            self.cout=L.Linear(None,1,initialW=w)
+            self.lout=L.Linear(None,1,initialW=w)
 
     def __call__(self,x):
         h=self.down0(x)
         h=self.down1(h)
         h=self.down2(h)
         h=self.down3(h)
-        h=self.cout(h)
+        h=self.lout(h)
 
         return h
