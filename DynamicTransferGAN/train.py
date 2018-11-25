@@ -7,7 +7,9 @@ import argparse
 import os
 import pylab
 import cv2 as cv
-from model import Discriminator,Predictor
+import math
+from model import Predictor,Condition,Discriminator_image,Discriminator_stream
+from model import FeatureEmbedding,FeatureExtractor,EncDec
 
 xp=cuda.cupy
 cuda.get_device(0).use()
@@ -29,11 +31,10 @@ def prepare_dataset(filename,size=128):
         return hr_image
 
 def make_diff(image_array):
-    source = image_array[:,0:3,:,:].reshape(1,3,size,size)
-    sources = F.tile(source,(1,16,1,1))
-    diff = image_array - sources
+    source = image_array[0].reshape(1,3,size,size)
+    sources = F.tile(source,(framesize,1,1,1))
 
-    return diff
+    return sources
 
 parser=argparse.ArgumentParser(description="DynamicTransfer")
 parser.add_argument("--epochs",default=1000,type=int,help="the number of epochs")
@@ -50,6 +51,7 @@ interval=args.interval
 framesize=args.framesize
 weight=args.weight
 size=args.size
+wid=int(math.sqrt(framesize))
 
 outdir="./output/"
 if not os.path.exists(outdir):
@@ -61,38 +63,44 @@ list_len=len(image_list)
 
 input_box=[]
 frame_box=[]
-diff_box=[]
 rnd=np.random.randint(list_len)
 dir_path=image_path+image_list[rnd]
-for index in range(framesize):
+for index in range(4,12):
     inp=dir_path+"/"+str(0)+".png"
     inp=prepare_dataset(inp)
     input_box.append(inp)
     img=dir_path+"/"+str(index)+".png"
     img=prepare_dataset(img)
-    diff=img-inp
     frame_box.append(img)
-    diff_box.append(diff)
 
-test_diff=chainer.as_variable(xp.concatenate(xp.array(diff_box),axis=0).astype(xp.float32)).reshape(1,48,128,128)
+xtest = chainer.as_variable(xp.array(input_box).astype(xp.float32))
+ctest = chainer.as_variable(xp.array(frame_box).astype(xp.float32))
 
-test_content = prepare_dataset("./test.png")
-test_content = chainer.as_variable(xp.array(test_content).astype(xp.float32)).reshape(1,3,size,size)
-test_content = F.tile(test_content,(1,16,1,1))
-
-test = F.concat([test_content,test_diff],axis=1)
+test = prepare_dataset("./test.png")
+test = chainer.as_variable(xp.array(test).astype(xp.float32)).reshape(1,3,size,size)
+test = F.tile(test,(framesize,1,1,1))
 
 predictor=Predictor()
 predictor.to_gpu()
 pre_opt=set_optimizer(predictor)
 
-discriminator_content=Discriminator()
+discriminator_content=Discriminator_image()
 discriminator_content.to_gpu()
 dis_c_opt=set_optimizer(discriminator_content)
 
-discriminator_sequence=Discriminator()
+discriminator_sequence=Discriminator_stream()
 discriminator_sequence.to_gpu()
 dis_s_opt=set_optimizer(discriminator_sequence)
+
+feature_extractor=EncDec()
+feature_extractor.to_gpu()
+fextract_opt = set_optimizer(feature_extractor)
+serializers.load_npz("./encdec.model",feature_extractor)
+feature_extractor.disable_update()
+
+feature_embed=FeatureEmbedding()
+feature_embed.to_gpu()
+fembed_opt = set_optimizer(feature_embed)
 
 for epoch in range(epochs):
     sum_pre_loss=0
@@ -100,22 +108,20 @@ for epoch in range(epochs):
     for batch in range(0,iterations,framesize):
         input_box=[]
         frame_box=[]
-        diff_box=[]
         rnd=np.random.randint(list_len)
         dir_path=image_path+image_list[rnd]
-        for index in range(framesize):
+        for index in range(4,12):
             inp=dir_path+"/"+str(0)+".png"
             inp=prepare_dataset(inp)
             input_box.append(inp)
             img=dir_path+"/"+str(index)+".png"
             img=prepare_dataset(img)
-            diff=img-inp
             frame_box.append(img)
-            diff_box.append(diff)
 
-        x=chainer.as_variable(xp.concatenate(xp.array(input_box),axis=0).astype(xp.float32)).reshape(1,48,128,128)
-        t=chainer.as_variable(xp.concatenate(xp.array(frame_box),axis=0).astype(xp.float32)).reshape(1,48,128,128)
-        c=chainer.as_variable(xp.concatenate(xp.array(diff_box),axis=0).astype(xp.float32)).reshape(1,48,128,128)
+        x = chainer.as_variable(xp.array(input_box).astype(xp.float32))
+        t = chainer.as_variable(xp.array(frame_box).astype(xp.float32))
+        embed = feature_extractor(t) - feature_extractor(x)
+        c = feature_embed(embed)
 
         z=F.concat([x,c],axis=1)
         y=predictor(z)
@@ -123,12 +129,12 @@ for epoch in range(epochs):
         t_dis=discriminator_content(t)
         dis_loss=F.mean(F.softplus(-t_dis)) + F.mean(F.softplus(y_dis))
 
-        c_g = make_diff(y)
-        c_dis = discriminator_sequence(c)
+        c_g = feature_extractor(y) - feature_extractor(make_diff(y))
+        c_dis = discriminator_sequence(embed)
         c_g_dis = discriminator_sequence(c_g)
         dis_loss+=F.mean(F.softplus(-c_dis)) + F.mean(F.softplus(c_g_dis))
 
-        y.unchain_backward()
+        c_g.unchain_backward()
 
         discriminator_content.cleargrads()
         discriminator_sequence.cleargrads()
@@ -139,11 +145,9 @@ for epoch in range(epochs):
 
         y=predictor(z)
         y_dis=discriminator_content(y)
-        t_dis=discriminator_content(t)
         gen_loss=F.mean(F.softplus(-y_dis))
 
-        c_g = make_diff(y)
-        c_dis = discriminator_sequence(c)
+        c_g = feature_extractor(y) - feature_extractor(make_diff(y))
         c_g_dis = discriminator_sequence(c_g)
         gen_loss+=F.mean(F.softplus(-c_g_dis))
 
@@ -152,8 +156,12 @@ for epoch in range(epochs):
         gen_loss+=weight * content_loss
 
         predictor.cleargrads()
+        feature_extractor.cleargrads()
+        feature_embed.cleargrads()
         gen_loss.backward()
         pre_opt.update()
+        fextract_opt.update()
+        fembed_opt.update()
         gen_loss.unchain_backward()
 
         sum_dis_loss += dis_loss.data.get()
@@ -165,11 +173,15 @@ for epoch in range(epochs):
             pylab.rcParams['figure.figsize'] = (16.0,16.0)
             pylab.clf()
             with chainer.using_config("train",False):
-                y = predictor(test)
-            y = y[0].data.get()
+                c = feature_extractor(ctest) - feature_extractor(xtest)
+                c = feature_embed(c)
+                y = predictor(F.concat([test,c]))
+            c.unchain_backward()
+            y.unchain_backward()
+            y = y.data.get()
             for i_ in range(framesize):
-                tmp = np.clip(y[i_*3:(i_+1)*3]*127.5+127.5 ,0 ,255).reshape(3,128,128).transpose(1,2,0).astype(np.uint8)
-                pylab.subplot(4,4,i_+1)
+                tmp = np.clip(y[i_]*127.5+127.5 ,0 ,255).transpose(1,2,0).astype(np.uint8)
+                pylab.subplot(3,3,i_+1)
                 pylab.imshow(tmp)
                 pylab.axis("off")
                 pylab.savefig("%s/visualize_%d"%(outdir,epoch))
