@@ -38,7 +38,7 @@ outdir="./output/"
 if not os.path.exists(outdir):
     os.mkdir(outdir)
 
-image_path="/usr/MachineLearning/Dataset/cinderella/"
+image_path="./cinderella/"
 image_list=os.listdir(image_path)
 image_len=len(image_list)
 
