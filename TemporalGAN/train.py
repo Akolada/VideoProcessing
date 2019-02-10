@@ -79,8 +79,8 @@ for epoch in range(epochs):
         batch_box = []
         for _ in range(batchsize):
             frame_box = []
+            start_frame = np.random.randint(1, 1000 - framesize)
             for index in range(framesize):
-                start_frame = np.random.randint(1, 1000 - framesize)
                 filename=image_path + "tenka_" + str(start_frame + index) + ".png"
                 frame=prepare_dataset(filename)
                 frame_box.append(frame)
