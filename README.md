@@ -1,5 +1,5 @@
 # VideoProcessing
-GANで動画処理を行っていく
+GANで動画処理(主に動画生成、動画スタイル変換)を行っていく
 
 ## Quick Results
 ### Recycle-GAN
