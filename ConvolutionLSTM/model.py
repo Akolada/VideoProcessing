@@ -95,11 +95,11 @@ class EncDec(Chain):
             self.cbr0=CBR(3,base,down=True)
             self.cbr1=CBR(base,base*2,down=True)
             self.cbr2=CBR(base*2,base*4,down=True)
-            #self.cbr3=CBR(base*4,base*8,down=True)
             self.clstm0 = ConvLSTM(base*4,base*4,3)
             self.cbr3 = CBR(base*4,base*2,up=True)
             self.cbr4 = CBR(base*2,base,up=True)
-            self.cbr5 = CBR(base,3,up=True)
+            self.cbr5 = CBR(base,base,up=True)
+            self.cbr6 = L.Convolution2D(base,3,3,1,1,initialW=w)
 
     def __call__(self,x):
         self.clstm0.reset_state()
@@ -112,6 +112,7 @@ class EncDec(Chain):
         h=self.cbr3(h)
         h=self.cbr4(h)
         h=self.cbr5(h)
+        h=self.cbr6(h)
 
         return h
 
