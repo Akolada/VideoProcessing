@@ -20,4 +20,4 @@ $ python train.py
 
 - Predictorの入力には現時刻とその前の時刻のフレームをconcatして用いた
 - Recycle lossとRecurrent loss、Cycle lossの重みは10.0
-- 最適化手法はAdam(α=0.0002、β
+- 最適化手法はAdam(α=0.0002、β=0.5)
