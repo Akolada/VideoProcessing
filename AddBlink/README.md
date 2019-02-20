@@ -1,5 +1,5 @@
 # Adding Blink to single image with using optical flow
-リポジトリ名FlowTextureGANと書いてありますが、単にOptical flowを用いて瞬き付与を行っただけです。
+Optical flowを用いて瞬き付与を行います。
 
 ## Summary
 ![here](https://github.com/SerialLain3170/VideoProcessing/blob/master/AddBlink/network.png)
